@@ -93,7 +93,13 @@ jobs := valorderedmap.NewFunc[string, Job](func(a, b Job) int {
 | `All()`                    | Iterator in ascending value order             | O(n)               |
 | `Clear()`                  | Remove everything                             | O(1)*              |
 
-When two entries have equal values, the one that was `Set` earlier comes first.
+Equal values retain insertion order. Comparator-equal updates preserve position;
+updates that change ordering count as reinsertion.
+
+Use the constructors; the zero value is not ready for insertion. Do not copy a
+`Map` after first use. `Set` panics for non-reflexive keys (such as NaN).
+Comparators must define a stable strict weak ordering and must not mutate the
+map. Do not mutate stored values in ways that change their ordering.
 
 A `Map` is **not** safe for concurrent use. Wrap it in a `sync.Mutex` if you
 share it between goroutines. Don't modify the map while ranging over `All()`.

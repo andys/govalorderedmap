@@ -8,7 +8,8 @@
 //	Get, Has, Len          O(1)
 //	Set, Delete            O(log n) expected
 //	DeleteBefore(v)        O(log n + k) expected, k = number removed
-//	Min, Ascend            O(log n) / O(n)
+//	Min, Max              O(log n) expected
+//	All                   O(n)
 //
 // A Map is not safe for concurrent use.
 package valorderedmap
@@ -27,6 +28,8 @@ type node[K comparable, V any] struct {
 }
 
 // Map is a key/value map kept ordered by value.
+// Use New or NewFunc to initialize it. Do not copy a Map after first use.
+// Values must not be mutated in ways that change their ordering while stored.
 type Map[K comparable, V any] struct {
 	m       map[K]*node[K, V]
 	root    *node[K, V]
@@ -42,6 +45,7 @@ func New[K comparable, V cmp.Ordered]() *Map[K, V] {
 
 // NewFunc creates a Map using compare to order values. compare must return
 // a negative number when a < b, zero when equal, positive when a > b.
+// It must define a stable strict weak ordering and must not mutate the map.
 func NewFunc[K comparable, V any](compare func(a, b V) int) *Map[K, V] {
 	return &Map[K, V]{
 		m:       make(map[K]*node[K, V]),
@@ -68,8 +72,12 @@ func (t *Map[K, V]) Has(key K) bool {
 	return ok
 }
 
-// Set inserts or updates key with val.
+// Set inserts or updates key with val. Comparator-equal updates preserve tie order.
+// It panics if key is non-reflexive (key != key), such as a NaN key.
 func (t *Map[K, V]) Set(key K, val V) {
+	if key != key {
+		panic("valorderedmap: non-reflexive key")
+	}
 	n, ok := t.m[key]
 	if ok {
 		if t.compare(n.val, val) == 0 {
@@ -142,7 +150,9 @@ func (t *Map[K, V]) Max() (key K, val V, ok bool) {
 }
 
 // All returns an iterator over entries in ascending value order (ties in
-// order of last Set). The map must not be modified during iteration.
+// insertion order; comparator-equal updates preserve their position).
+// Updates that change ordering count as reinsertion.
+// The map must not be modified during iteration.
 func (t *Map[K, V]) All() func(yield func(K, V) bool) {
 	return func(yield func(K, V) bool) {
 		var walk func(n *node[K, V]) bool
