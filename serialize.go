@@ -30,20 +30,23 @@ func (t *Map[K, V]) Entries() []Entry[K, V] {
 	return out
 }
 
-// Load replaces the contents of the map with entries, inserting them in
-// slice order so that ties keep that order. Entries that cannot be stored
-// are skipped: keys that are not comparable at run time (an interface key
-// holding a slice, map, or func), non-reflexive keys such as NaN, and
-// repeated keys (the first occurrence wins). It returns the number of
-// entries skipped. The only error is ErrUninitialized, in which case the
-// map is left unchanged.
+// Load merges entries into the map. It does not clear the map first:
+// existing keys not in entries are kept. Each entry is applied with Set, in
+// slice order. So an entry whose key is already present overwrites that
+// value, and if a key repeats within entries, the last occurrence wins.
+// New keys with equal values keep their slice order. To replace the
+// contents instead, call Clear first.
+//
+// Entries whose keys can't be stored are skipped: keys that are not
+// comparable at run time (an interface key holding a slice, map, or func)
+// and non-reflexive keys such as NaN. Load returns the number skipped. The
+// only error is ErrUninitialized, in which case the map is left unchanged.
 func (t *Map[K, V]) Load(entries []Entry[K, V]) (skipped int, err error) {
 	if t.compare == nil {
 		return 0, ErrUninitialized
 	}
-	t.Clear()
 	for _, e := range entries {
-		if !validKey(e.Key) || t.Has(e.Key) {
+		if !validKey(e.Key) {
 			skipped++
 			continue
 		}
@@ -71,8 +74,10 @@ func (t *Map[K, V]) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON replaces the map's contents from the format produced by
 // MarshalJSON. The receiver must have been created with New or NewFunc so
 // that it has a comparator. JSON null yields an empty map. Entries with
-// invalid or repeated keys are skipped as described for Load. If the JSON
-// itself is malformed, an error is returned and the map is left unchanged.
+// invalid keys are skipped as described for Load, and repeated keys are
+// skipped too (the first occurrence wins). Unlike Load, decoding does not
+// merge. If the JSON itself is malformed, an error is returned and the map
+// is left unchanged.
 func (t *Map[K, V]) UnmarshalJSON(data []byte) error {
 	if t.compare == nil {
 		return ErrUninitialized
@@ -83,6 +88,11 @@ func (t *Map[K, V]) UnmarshalJSON(data []byte) error {
 			return err
 		}
 	}
-	_, err := t.Load(entries)
-	return err
+	t.Clear()
+	for _, e := range entries {
+		if validKey(e.Key) && !t.Has(e.Key) {
+			t.Set(e.Key, e.Value)
+		}
+	}
+	return nil
 }

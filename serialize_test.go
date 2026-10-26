@@ -104,6 +104,20 @@ func TestJSONUninitialized(t *testing.T) {
 	}
 }
 
+func TestLoadMerges(t *testing.T) {
+	m := New[string, int]()
+	m.Set("a", 1)
+	m.Set("b", 2)
+	n, err := m.Load([]Entry[string, int]{{"b", 20}, {"c", 3}, {"c", 30}})
+	if err != nil || n != 0 {
+		t.Fatal(n, err)
+	}
+	want := []Entry[string, int]{{"a", 1}, {"b", 20}, {"c", 30}}
+	if !slices.Equal(m.Entries(), want) {
+		t.Fatal(m.Entries())
+	}
+}
+
 func TestLoadSkipsInvalidKeys(t *testing.T) {
 	m := New[float64, int]()
 	n, err := m.Load([]Entry[float64, int]{{math.NaN(), 1}, {1, 1}})

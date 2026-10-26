@@ -129,8 +129,13 @@ types, or if the map is uninitialized (`ErrUninitialized`). In both cases the
 map is left unchanged.
 
 For other formats (gob, CBOR, MessagePack, ...), use `Entries()` to get a
-`[]Entry[K, V]` snapshot and `Load(entries)` to restore it. `Load` returns the
-number of entries it skipped.
+`[]Entry[K, V]` snapshot and `Load(entries)` to restore it.
+
+`Load` merges rather than replaces. It keeps existing entries and applies each
+entry with `Set`, in slice order. An entry for a key that's already present
+overwrites the value, and if a key repeats within the slice, the last one wins.
+To restore a snapshot exactly, call `Clear()` before `Load`. `Load` skips
+non-reflexive and runtime-incomparable keys and returns the number it skipped.
 
 ## API
 
@@ -150,7 +155,7 @@ number of entries it skipped.
 | `Clear()`                  | Remove everything                             | O(1)*              |
 | `Clone() *Map[K, V]`       | Independent copy of the map's internal state  | O(n)               |
 | `Entries() []Entry[K, V]`  | Snapshot of all entries in value order        | O(n)               |
-| `Load(entries) (int, error)` | Replace contents; returns number skipped    | O(n log n) expected |
+| `Load(entries) (int, error)` | Merge (overwrite) entries; returns number skipped | O(n log n) expected |
 | `MarshalJSON` / `UnmarshalJSON` | JSON encoding as an array of entries     | O(n) / O(n log n)  |
 
 Equal values retain insertion order. Comparator-equal updates preserve position;
