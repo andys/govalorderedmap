@@ -88,6 +88,17 @@ func TestRandomized(t *testing.T) {
 			if got := m.DeleteBefore(v); got != want {
 				t.Fatalf("DeleteBefore removed %d want %d", got, want)
 			}
+		case 2:
+			want := 0
+			for rk, rv := range ref {
+				if rv >= v {
+					delete(ref, rk)
+					want++
+				}
+			}
+			if got := m.DeleteEqualOrAfter(v); got != want {
+				t.Fatalf("DeleteEqualOrAfter removed %d want %d", got, want)
+			}
 		default:
 			m.Set(k, v)
 			ref[k] = v
@@ -95,6 +106,48 @@ func TestRandomized(t *testing.T) {
 		check(t, m, ref)
 	}
 	check(t, m, ref)
+}
+
+func TestDeleteEqualOrAfter(t *testing.T) {
+	for _, threshold := range []int{0, 1, 2, 3, 4} {
+		t.Run(string(rune('0'+threshold)), func(t *testing.T) {
+			m := New[int, int]()
+			ref := map[int]int{}
+			for k, v := range []int{1, 2, 2, 3} {
+				m.Set(k, v)
+				if v < threshold {
+					ref[k] = v
+				}
+			}
+			want := m.Len() - len(ref)
+			if got := m.DeleteEqualOrAfter(threshold); got != want {
+				t.Fatalf("removed %d want %d", got, want)
+			}
+			check(t, m, ref)
+			if got := m.DeleteEqualOrAfter(threshold); got != 0 {
+				t.Fatalf("repeated deletion removed %d", got)
+			}
+			m.Set(4, threshold)
+			ref[4] = threshold
+			check(t, m, ref)
+		})
+	}
+	if got := New[int, int]().DeleteEqualOrAfter(0); got != 0 {
+		t.Fatalf("empty map removed %d", got)
+	}
+}
+
+func TestDeleteEqualOrAfterComparator(t *testing.T) {
+	m := NewFunc[int, int](func(a, b int) int { return cmp.Compare(b, a) })
+	for k, v := range []int{1, 2, 2, 3} {
+		m.Set(k, v)
+	}
+	if got := m.DeleteEqualOrAfter(2); got != 3 {
+		t.Fatalf("removed %d want 3", got)
+	}
+	if got := m.Entries(); !slices.Equal(got, []Entry[int, int]{{Key: 3, Value: 3}}) {
+		t.Fatalf("remaining entries: %v", got)
+	}
 }
 
 func TestClone(t *testing.T) {

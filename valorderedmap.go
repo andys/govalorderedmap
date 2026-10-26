@@ -1,6 +1,6 @@
 // Package valorderedmap provides a generic map whose entries are kept
-// sorted by value, supporting O(1) key lookup and fast removal of all
-// entries whose value is less than a threshold.
+// sorted by value, supporting O(1) key lookup and fast removal of entries
+// on either side of a value threshold.
 //
 // Internally it combines a hash map (key -> node) with a treap ordered by
 // (value, insertion sequence). Operations:
@@ -8,6 +8,7 @@
 //	Get, Has, Len          O(1)
 //	Set, Delete            O(log n) expected
 //	DeleteBefore(v)        O(log n + k) expected, k = number removed
+//	DeleteEqualOrAfter(v)  O(log n + k) expected, k = number removed
 //	Min, Max              O(log n) expected
 //	All                   O(n)
 //	Clone                 O(n)
@@ -164,6 +165,25 @@ func (t *Map[K, V]) DeleteBefore(val V) int {
 		}
 	}
 	walk(lt)
+	return count
+}
+
+// DeleteEqualOrAfter removes every entry whose value compares greater than or
+// equal to val and returns the number of entries removed.
+func (t *Map[K, V]) DeleteEqualOrAfter(val V) int {
+	lt, ge := t.splitBefore(t.root, val)
+	t.root = lt
+	count := 0
+	var walk func(n *node[K, V])
+	walk = func(n *node[K, V]) {
+		for n != nil {
+			walk(n.left)
+			delete(t.m, n.key)
+			count++
+			n = n.right
+		}
+	}
+	walk(ge)
 	return count
 }
 
