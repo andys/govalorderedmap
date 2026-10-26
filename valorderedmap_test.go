@@ -97,6 +97,86 @@ func TestRandomized(t *testing.T) {
 	check(t, m, ref)
 }
 
+func TestClone(t *testing.T) {
+	m := New[int, int]()
+	for i := 0; i < 100; i++ {
+		m.Set(i, i%5)
+	}
+	m.Delete(50)
+	m.Set(0, 3)
+	clone := m.Clone()
+	if !slices.Equal(m.Entries(), clone.Entries()) || clone.seq != m.seq {
+		t.Fatal("clone did not preserve entries and sequence")
+	}
+	for k, n := range m.m {
+		copied := clone.m[k]
+		if copied == n || copied.seq != n.seq || copied.prio != n.prio {
+			t.Fatal("clone shared a node or changed its metadata")
+		}
+	}
+	if clone.rng == m.rng || *clone.rng != *m.rng {
+		t.Fatal("random-generator state was not independently copied")
+	}
+	before := m.Entries()
+	clone.Set(100, 3)
+	clone.Set(1, 9)
+	clone.Delete(2)
+	clone.DeleteBefore(2)
+	ref := make(map[int]int)
+	for _, entry := range clone.Entries() {
+		ref[entry.Key] = entry.Value
+	}
+	check(t, clone, ref)
+	if !slices.Equal(m.Entries(), before) {
+		t.Fatal("clone mutations affected original")
+	}
+	cloneBefore := clone.Entries()
+	m.Set(3, 10)
+	m.Delete(4)
+	m.Clear()
+	if !slices.Equal(clone.Entries(), cloneBefore) {
+		t.Fatal("original mutations affected clone")
+	}
+	clone.Clear()
+	check(t, clone, map[int]int{})
+}
+
+func TestCloneEmpty(t *testing.T) {
+	m := New[int, int]()
+	clone := m.Clone()
+	check(t, clone, map[int]int{})
+	clone.Set(1, 2)
+	check(t, clone, map[int]int{1: 2})
+	check(t, m, map[int]int{})
+}
+
+func TestCloneCustomComparator(t *testing.T) {
+	type value struct {
+		priority int
+		payload  *int
+	}
+	m := NewFunc[string, value](func(a, b value) int {
+		return cmp.Compare(b.priority, a.priority)
+	})
+	payload := 42
+	m.Set("a", value{1, &payload})
+	m.Set("b", value{2, &payload})
+	m.Set("c", value{2, &payload})
+	clone := m.Clone()
+	clone.Set("d", value{2, &payload})
+	clone.Set("b", value{2, &payload})
+	var keys []string
+	for k := range clone.All() {
+		keys = append(keys, k)
+	}
+	if !slices.Equal(keys, []string{"b", "c", "d", "a"}) {
+		t.Fatalf("clone order = %v", keys)
+	}
+	if v, _ := clone.Get("a"); v.payload != &payload {
+		t.Fatal("payload was not copied by assignment")
+	}
+}
+
 func TestMinMax(t *testing.T) {
 	m := New[string, float64]()
 	if _, _, ok := m.Min(); ok {

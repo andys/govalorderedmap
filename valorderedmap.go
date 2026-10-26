@@ -10,6 +10,7 @@
 //	DeleteBefore(v)        O(log n + k) expected, k = number removed
 //	Min, Max              O(log n) expected
 //	All                   O(n)
+//	Clone                 O(n)
 //
 // A Map is not safe for concurrent use.
 package valorderedmap
@@ -28,7 +29,7 @@ type node[K comparable, V any] struct {
 }
 
 // Map is a key/value map kept ordered by value.
-// Use New or NewFunc to initialize it. Do not copy a Map after first use.
+// Use New or NewFunc to initialize it. Use Clone rather than copying a Map after first use.
 // Values must not be mutated in ways that change their ordering while stored.
 type Map[K comparable, V any] struct {
 	m       map[K]*node[K, V]
@@ -56,6 +57,33 @@ func NewFunc[K comparable, V any](compare func(a, b V) int) *Map[K, V] {
 
 // Len returns the number of entries.
 func (t *Map[K, V]) Len() int { return len(t.m) }
+
+// Clone returns an independent copy of the map in O(n) time, preserving its
+// comparator and tie order. All internal nodes and random-generator state are
+// copied. Keys and values are copied by assignment, not recursively; the
+// comparator function is shared, including any captured state.
+func (t *Map[K, V]) Clone() *Map[K, V] {
+	rng := *t.rng
+	clone := &Map[K, V]{
+		m:       make(map[K]*node[K, V], len(t.m)),
+		compare: t.compare,
+		seq:     t.seq,
+		rng:     &rng,
+	}
+	var copyNode func(*node[K, V]) *node[K, V]
+	copyNode = func(n *node[K, V]) *node[K, V] {
+		if n == nil {
+			return nil
+		}
+		copied := *n
+		copied.left = copyNode(n.left)
+		copied.right = copyNode(n.right)
+		clone.m[copied.key] = &copied
+		return &copied
+	}
+	clone.root = copyNode(t.root)
+	return clone
+}
 
 // Get returns the value for key and whether it was present.
 func (t *Map[K, V]) Get(key K) (V, bool) {

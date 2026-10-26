@@ -76,6 +76,15 @@ jobs := valorderedmap.NewFunc[string, Job](func(a, b Job) int {
 })
 ```
 
+### Cloning
+
+Use `copy := m.Clone()` to make an independent copy in O(n) time, preserving
+the comparator and insertion order for equal values. The internal tree, lookup
+map, and random-generator state are deeply copied, so map operations on either
+copy do not affect the other. Keys and values are copied by assignment: pointers,
+slices, and other referenced data are not recursively cloned. The comparator
+function and any captured state are shared.
+
 ### JSON serialization
 
 A `Map` implements `json.Marshaler` and `json.Unmarshaler`. It encodes as an
@@ -139,6 +148,7 @@ number of entries it skipped.
 | `Max() (K, V, bool)`       | Entry with the largest value                  | O(log n) expected  |
 | `All()`                    | Iterator in ascending value order             | O(n)               |
 | `Clear()`                  | Remove everything                             | O(1)*              |
+| `Clone() *Map[K, V]`       | Independent copy of the map's internal state  | O(n)               |
 | `Entries() []Entry[K, V]`  | Snapshot of all entries in value order        | O(n)               |
 | `Load(entries) (int, error)` | Replace contents; returns number skipped    | O(n log n) expected |
 | `MarshalJSON` / `UnmarshalJSON` | JSON encoding as an array of entries     | O(n) / O(n log n)  |
