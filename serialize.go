@@ -59,7 +59,10 @@ func (t *Map[K, V]) Load(entries []Entry[K, V]) (skipped int, err error) {
 // comparable at run time (checked first, since == itself panics otherwise)
 // and equal to itself.
 func validKey[K comparable](key K) bool {
-	if !reflect.ValueOf(&key).Elem().Comparable() {
+	// Only interface-typed K can hold a non-comparable dynamic value; for
+	// every other K the reflect check is unnecessary and allocates per call.
+	if reflect.TypeFor[K]().Kind() == reflect.Interface &&
+		!reflect.ValueOf(&key).Elem().Comparable() {
 		return false
 	}
 	return key == key
