@@ -76,6 +76,53 @@ jobs := valorderedmap.NewFunc[string, Job](func(a, b Job) int {
 })
 ```
 
+### JSON serialization
+
+A `Map` implements `json.Marshaler` and `json.Unmarshaler`. It encodes as an
+array of `{"key", "value"}` objects in ascending value order, so the order of
+equal values is preserved across a round trip:
+
+```go
+m := valorderedmap.New[string, int]()
+m.Set("bob", 10)
+m.Set("alice", 30)
+m.Set("carol", 10)
+
+data, err := json.Marshal(m)
+// [{"key":"bob","value":10},{"key":"carol","value":10},{"key":"alice","value":30}]
+
+restored := valorderedmap.New[string, int]() // must be created with New/NewFunc
+err = json.Unmarshal(data, restored)
+```
+
+The comparator can't be serialized, so you must decode into a map created
+with `New` or `NewFunc`. This also applies to struct fields:
+
+```go
+type Message struct {
+	Jobs *valorderedmap.Map[string, Job] `json:"jobs"`
+}
+
+msg := Message{Jobs: valorderedmap.NewFunc[string, Job](compareJobs)}
+err := json.Unmarshal(data, &msg)
+```
+
+Decoding replaces the map's existing contents. JSON `null` decodes to an empty
+map. Entries whose keys can't be stored are skipped rather than causing a panic:
+
+- non-reflexive keys, such as NaN;
+- keys that aren't comparable at runtime, such as JSON arrays or objects
+  decoded into an `any` key;
+- repeated keys (the first occurrence wins).
+
+`Unmarshal` returns an error only if the JSON is malformed or has the wrong
+types, or if the map is uninitialized (`ErrUninitialized`). In both cases the
+map is left unchanged.
+
+For other formats (gob, CBOR, MessagePack, ...), use `Entries()` to get a
+`[]Entry[K, V]` snapshot and `Load(entries)` to restore it. `Load` returns the
+number of entries it skipped.
+
 ## API
 
 | Method                     | Description                                   | Complexity         |
@@ -92,6 +139,9 @@ jobs := valorderedmap.NewFunc[string, Job](func(a, b Job) int {
 | `Max() (K, V, bool)`       | Entry with the largest value                  | O(log n) expected  |
 | `All()`                    | Iterator in ascending value order             | O(n)               |
 | `Clear()`                  | Remove everything                             | O(1)*              |
+| `Entries() []Entry[K, V]`  | Snapshot of all entries in value order        | O(n)               |
+| `Load(entries) (int, error)` | Replace contents; returns number skipped    | O(n log n) expected |
+| `MarshalJSON` / `UnmarshalJSON` | JSON encoding as an array of entries     | O(n) / O(n log n)  |
 
 Equal values retain insertion order. Comparator-equal updates preserve position;
 updates that change ordering count as reinsertion.
