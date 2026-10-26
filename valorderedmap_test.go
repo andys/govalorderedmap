@@ -2,12 +2,167 @@ package valorderedmap
 
 import (
 	"cmp"
+	"encoding/json"
 	"math"
 	"math/rand/v2"
 	"slices"
 	"sort"
+	"sync"
 	"testing"
 )
+
+func TestConcurrentGetSet(t *testing.T) {
+	m := New[int, int]()
+	m.Set(1, 1)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for worker := 0; worker < 8; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for i := 0; i < 1000; i++ {
+				m.Set(1, 1)
+				if value, ok := m.Get(1); !ok || value != 1 {
+					t.Errorf("Get(1) = %d, %v; want 1, true", value, ok)
+					return
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+}
+
+func TestConcurrentInsert(t *testing.T) {
+	m := New[int, int]()
+	var wg sync.WaitGroup
+	for worker := 0; worker < 8; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for i := 0; i < 100; i++ {
+				key := worker*100 + i
+				m.Set(key, key)
+			}
+		}(worker)
+	}
+	wg.Wait()
+	ref := make(map[int]int)
+	for i := 0; i < 800; i++ {
+		ref[i] = i
+	}
+	check(t, m, ref)
+}
+
+func TestConcurrentOperations(t *testing.T) {
+	maps := [2]*Map[int, int]{New[int, int](), New[int, int]()}
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for worker := 0; worker < 8; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			<-start
+			m, other := maps[worker%2], maps[1-worker%2]
+			for i := 0; i < 300; i++ {
+				key := (i + worker) % 64
+				switch i % 15 {
+				case 0:
+					m.Set(key, i)
+				case 1:
+					m.Get(key)
+					m.Has(key)
+					m.Len()
+				case 2:
+					m.Delete(key)
+				case 3:
+					m.DeleteBefore(i / 2)
+				case 4:
+					m.DeleteEqualOrAfter(i)
+				case 5:
+					m.Min()
+					m.Max()
+				case 6:
+					// Opposite-direction merges must not deadlock.
+					m.Merge(other)
+				case 7:
+					clone := m.Clone()
+					ref := make(map[int]int)
+					for _, entry := range clone.Entries() {
+						ref[entry.Key] = entry.Value
+					}
+					check(t, clone, ref)
+					clone.Set(key, i)
+				case 8:
+					seen := make(map[int]bool)
+					previous := math.MinInt
+					for k, v := range m.All() {
+						if seen[k] || v < previous {
+							t.Error("iteration snapshot has duplicate keys or unsorted values")
+							return
+						}
+						seen[k], previous = true, v
+						m.Set(k, v)
+					}
+				case 9:
+					if _, err := m.Load([]Entry[int, int]{{key, i}, {(key + 1) % 64, i}}); err != nil {
+						t.Error(err)
+						return
+					}
+				case 10:
+					if _, err := json.Marshal(m); err != nil {
+						t.Error(err)
+						return
+					}
+				case 11:
+					if err := json.Unmarshal([]byte(`[{"key":1,"value":2},{"key":3,"value":4}]`), m); err != nil {
+						t.Error(err)
+						return
+					}
+				case 12:
+					m.Clear()
+				case 13:
+					m.Entries()
+				case 14:
+					m.Merge(m)
+				}
+			}
+		}(worker)
+	}
+	close(start)
+	wg.Wait()
+	for _, m := range maps {
+		ref := make(map[int]int)
+		for _, entry := range m.Entries() {
+			ref[entry.Key] = entry.Value
+		}
+		check(t, m, ref)
+	}
+}
+
+func TestAllSnapshot(t *testing.T) {
+	m := New[int, int]()
+	m.Set(1, 1)
+	iter := m.All()
+	m.Set(2, 2)
+	var got []Entry[int, int]
+	for k, v := range iter {
+		got = append(got, Entry[int, int]{k, v})
+		m.Clear()
+		m.Set(3, 3)
+	}
+	if !slices.Equal(got, []Entry[int, int]{{1, 1}, {2, 2}}) {
+		t.Fatalf("snapshot = %v", got)
+	}
+	got = nil
+	for k, v := range iter {
+		got = append(got, Entry[int, int]{k, v})
+	}
+	if !slices.Equal(got, []Entry[int, int]{{3, 3}}) {
+		t.Fatalf("reused iterator snapshot = %v", got)
+	}
+}
 
 func check(t *testing.T, m *Map[int, int], ref map[int]int) {
 	t.Helper()

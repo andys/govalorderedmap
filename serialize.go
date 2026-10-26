@@ -22,11 +22,21 @@ var ErrUninitialized = errors.New("valorderedmap: map not initialized with New o
 // Entries returns all entries in ascending value order (ties in their
 // current order). Passing the result to Load on a map with the same
 // comparator reproduces the same iteration order.
+// The snapshot is taken under a read lock. Keys and values are copied by
+// assignment, not recursively.
 func (t *Map[K, V]) Entries() []Entry[K, V] {
-	out := make([]Entry[K, V], 0, t.Len())
-	for k, v := range t.All() {
-		out = append(out, Entry[K, V]{k, v})
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make([]Entry[K, V], 0, len(t.m))
+	var walk func(*node[K, V])
+	walk = func(n *node[K, V]) {
+		for n != nil {
+			walk(n.left)
+			out = append(out, Entry[K, V]{n.key, n.val})
+			n = n.right
+		}
 	}
+	walk(t.root)
 	return out
 }
 
@@ -41,7 +51,10 @@ func (t *Map[K, V]) Entries() []Entry[K, V] {
 // comparable at run time (an interface key holding a slice, map, or func)
 // and non-reflexive keys such as NaN. Load returns the number skipped. The
 // only error is ErrUninitialized, in which case the map is left unchanged.
+// The entire load is applied under a single write lock.
 func (t *Map[K, V]) Load(entries []Entry[K, V]) (skipped int, err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if t.compare == nil {
 		return 0, ErrUninitialized
 	}
@@ -50,7 +63,7 @@ func (t *Map[K, V]) Load(entries []Entry[K, V]) (skipped int, err error) {
 			skipped++
 			continue
 		}
-		t.Set(e.Key, e.Value)
+		t.set(e.Key, e.Value)
 	}
 	return skipped, nil
 }
@@ -81,6 +94,8 @@ func (t *Map[K, V]) MarshalJSON() ([]byte, error) {
 // skipped too (the first occurrence wins). Unlike Load, decoding does not
 // merge. If the JSON itself is malformed, an error is returned and the map
 // is left unchanged.
+// JSON is decoded before locking the map; the replacement is then applied
+// under a single write lock.
 func (t *Map[K, V]) UnmarshalJSON(data []byte) error {
 	if t.compare == nil {
 		return ErrUninitialized
@@ -91,10 +106,16 @@ func (t *Map[K, V]) UnmarshalJSON(data []byte) error {
 			return err
 		}
 	}
-	t.Clear()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	clear(t.m)
+	t.root = nil
 	for _, e := range entries {
-		if validKey(e.Key) && !t.Has(e.Key) {
-			t.Set(e.Key, e.Value)
+		if !validKey(e.Key) {
+			continue
+		}
+		if _, exists := t.m[e.Key]; !exists {
+			t.set(e.Key, e.Value)
 		}
 	}
 	return nil

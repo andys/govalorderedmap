@@ -14,12 +14,13 @@
 //	Clone                 O(n)
 //	Merge(other)          O(m log(n + m)) expected, m = other.Len()
 //
-// A Map is not safe for concurrent use.
+// A Map is safe for concurrent use. Iteration uses a snapshot.
 package valorderedmap
 
 import (
 	"cmp"
 	"math/rand/v2"
+	"sync"
 )
 
 type node[K comparable, V any] struct {
@@ -30,10 +31,11 @@ type node[K comparable, V any] struct {
 	left, right *node[K, V]
 }
 
-// Map is a key/value map kept ordered by value.
+// Map is a key/value map kept ordered by value, safe for concurrent use.
 // Use New or NewFunc to initialize it. Use Clone rather than copying a Map after first use.
 // Values must not be mutated in ways that change their ordering while stored.
 type Map[K comparable, V any] struct {
+	mu      sync.RWMutex
 	m       map[K]*node[K, V]
 	root    *node[K, V]
 	compare func(a, b V) int
@@ -48,7 +50,9 @@ func New[K comparable, V cmp.Ordered]() *Map[K, V] {
 
 // NewFunc creates a Map using compare to order values. compare must return
 // a negative number when a < b, zero when equal, positive when a > b.
-// It must define a stable strict weak ordering and must not mutate the map.
+// It must define a stable strict weak ordering and must not call methods on
+// the map, since it runs with the map locked. Any captured state shared with
+// other goroutines (including through Clone) must be synchronized by the caller.
 func NewFunc[K comparable, V any](compare func(a, b V) int) *Map[K, V] {
 	return &Map[K, V]{
 		m:       make(map[K]*node[K, V]),
@@ -58,13 +62,19 @@ func NewFunc[K comparable, V any](compare func(a, b V) int) *Map[K, V] {
 }
 
 // Len returns the number of entries.
-func (t *Map[K, V]) Len() int { return len(t.m) }
+func (t *Map[K, V]) Len() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return len(t.m)
+}
 
 // Clone returns an independent copy of the map in O(n) time, preserving its
 // comparator and tie order. All internal nodes and random-generator state are
 // copied. Keys and values are copied by assignment, not recursively; the
 // comparator function is shared, including any captured state.
 func (t *Map[K, V]) Clone() *Map[K, V] {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	rng := *t.rng
 	clone := &Map[K, V]{
 		m:       make(map[K]*node[K, V], len(t.m)),
@@ -89,6 +99,8 @@ func (t *Map[K, V]) Clone() *Map[K, V] {
 
 // Get returns the value for key and whether it was present.
 func (t *Map[K, V]) Get(key K) (V, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	if n, ok := t.m[key]; ok {
 		return n.val, true
 	}
@@ -98,6 +110,8 @@ func (t *Map[K, V]) Get(key K) (V, bool) {
 
 // Has reports whether key is present.
 func (t *Map[K, V]) Has(key K) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	_, ok := t.m[key]
 	return ok
 }
@@ -105,6 +119,13 @@ func (t *Map[K, V]) Has(key K) bool {
 // Set inserts or updates key with val. Comparator-equal updates preserve tie order.
 // It panics if key is non-reflexive (key != key), such as a NaN key.
 func (t *Map[K, V]) Set(key K, val V) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.set(key, val)
+}
+
+// set requires t.mu to be write-locked.
+func (t *Map[K, V]) set(key K, val V) {
 	if key != key {
 		panic("valorderedmap: non-reflexive key")
 	}
@@ -129,17 +150,24 @@ func (t *Map[K, V]) Set(key K, val V) {
 // Entries are processed in other's iteration order using t's comparator.
 // Keys and values are copied by assignment, not recursively. Other is unchanged,
 // and merging a map into itself is a no-op.
+// Merge snapshots other before locking t; the two maps are not locked together.
+// All entries are applied to t under a single write lock.
 func (t *Map[K, V]) Merge(other *Map[K, V]) {
 	if t == other {
 		return
 	}
-	for key, val := range other.All() {
-		t.Set(key, val)
+	entries := other.Entries()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, entry := range entries {
+		t.set(entry.Key, entry.Value)
 	}
 }
 
 // Delete removes key, reporting whether it was present.
 func (t *Map[K, V]) Delete(key K) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	n, ok := t.m[key]
 	if !ok {
 		return false
@@ -152,6 +180,8 @@ func (t *Map[K, V]) Delete(key K) bool {
 // DeleteBefore removes every entry whose value is strictly less than val
 // and returns the number of entries removed.
 func (t *Map[K, V]) DeleteBefore(val V) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	lt, ge := t.splitBefore(t.root, val)
 	t.root = ge
 	count := 0
@@ -171,6 +201,8 @@ func (t *Map[K, V]) DeleteBefore(val V) int {
 // DeleteEqualOrAfter removes every entry whose value compares greater than or
 // equal to val and returns the number of entries removed.
 func (t *Map[K, V]) DeleteEqualOrAfter(val V) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	lt, ge := t.splitBefore(t.root, val)
 	t.root = lt
 	count := 0
@@ -189,6 +221,8 @@ func (t *Map[K, V]) DeleteEqualOrAfter(val V) int {
 
 // Min returns the entry with the smallest value.
 func (t *Map[K, V]) Min() (key K, val V, ok bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	n := t.root
 	if n == nil {
 		return key, val, false
@@ -201,6 +235,8 @@ func (t *Map[K, V]) Min() (key K, val V, ok bool) {
 
 // Max returns the entry with the largest value.
 func (t *Map[K, V]) Max() (key K, val V, ok bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	n := t.root
 	if n == nil {
 		return key, val, false
@@ -211,28 +247,27 @@ func (t *Map[K, V]) Max() (key K, val V, ok bool) {
 	return n.key, n.val, true
 }
 
-// All returns an iterator over entries in ascending value order (ties in
+// All returns an iterator over a snapshot in ascending value order (ties in
 // insertion order; comparator-equal updates preserve their position).
 // Updates that change ordering count as reinsertion.
-// The map must not be modified during iteration.
+// A snapshot is taken each time iteration starts, not when All is called.
+// Iteration uses O(n) extra space and holds no locks while yielding entries,
+// so the map may be modified from the loop body or by other goroutines.
+// Keys and values are copied by assignment, not recursively.
 func (t *Map[K, V]) All() func(yield func(K, V) bool) {
 	return func(yield func(K, V) bool) {
-		var walk func(n *node[K, V]) bool
-		walk = func(n *node[K, V]) bool {
-			for n != nil {
-				if !walk(n.left) || !yield(n.key, n.val) {
-					return false
-				}
-				n = n.right
+		for _, entry := range t.Entries() {
+			if !yield(entry.Key, entry.Value) {
+				return
 			}
-			return true
 		}
-		walk(t.root)
 	}
 }
 
 // Clear removes all entries.
 func (t *Map[K, V]) Clear() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	clear(t.m)
 	t.root = nil
 }

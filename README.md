@@ -163,11 +163,25 @@ updates that change ordering count as reinsertion.
 
 Use the constructors; the zero value is not ready for insertion. Do not copy a
 `Map` after first use. `Set` panics for non-reflexive keys (such as NaN).
-Comparators must define a stable strict weak ordering and must not mutate the
-map. Do not mutate stored values in ways that change their ordering.
+Comparators must define a stable strict weak ordering and must not call methods
+on the map: comparisons run while the map is locked. Do not mutate stored values
+in ways that change their ordering.
 
-A `Map` is **not** safe for concurrent use. Wrap it in a `sync.Mutex` if you
-share it between goroutines. Don't modify the map while ranging over `All()`.
+A `Map` is safe for concurrent use, with an internal `sync.RWMutex`. `Load` and
+JSON replacement each hold a single write lock. `Merge` snapshots the source
+before locking the destination, avoiding cross-map deadlocks; applying the
+snapshot to the destination holds a single write lock.
+
+`All()` takes an ordered snapshot when iteration starts, using O(n) additional
+space even if iteration stops early. It releases the lock before yielding, so
+the loop body and other goroutines can safely modify the map without changing
+the snapshot. `Entries`, `Clone`, and JSON marshaling also capture consistent
+snapshots. JSON encoding and decoding callbacks run without holding map locks.
+
+Keys and values are still copied by assignment, not recursively. The map's lock
+does not protect referenced data that callers mutate, or comparator state shared
+with other goroutines or clones. Synchronize that data separately. Sequences of
+separate method calls (such as `Has` followed by `Set`) are not atomic.
 
 \* `Clear` cost depends on the runtime's built-in `clear` for maps.
 
