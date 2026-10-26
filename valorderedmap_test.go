@@ -177,6 +177,76 @@ func TestCloneCustomComparator(t *testing.T) {
 	}
 }
 
+func TestMerge(t *testing.T) {
+	m := New[int, int]()
+	m.Set(1, 10)
+	m.Set(2, 20)
+	other := New[int, int]()
+	other.Set(2, 5)
+	other.Set(3, 15)
+	before := other.Entries()
+	m.Merge(other)
+	check(t, m, map[int]int{1: 10, 2: 5, 3: 15})
+	if !slices.Equal(other.Entries(), before) {
+		t.Fatal("merge changed source")
+	}
+	m.Set(3, 30)
+	m.Delete(2)
+	check(t, other, map[int]int{2: 5, 3: 15})
+	other.Set(1, 40)
+	other.Clear()
+	check(t, m, map[int]int{1: 10, 3: 30})
+}
+
+func TestMergeEmptyAndSelf(t *testing.T) {
+	m := New[int, int]()
+	other := New[int, int]()
+	m.Merge(other)
+	check(t, m, map[int]int{})
+	other.Set(1, 2)
+	other.Set(2, 2)
+	m.Merge(other)
+	check(t, m, map[int]int{1: 2, 2: 2})
+	before := m.Entries()
+	seq := m.seq
+	m.Merge(m)
+	m.Merge(New[int, int]())
+	if !slices.Equal(m.Entries(), before) || m.seq != seq {
+		t.Fatal("self or empty merge changed map")
+	}
+	check(t, m, map[int]int{1: 2, 2: 2})
+}
+
+func TestMergeCustomComparator(t *testing.T) {
+	type value struct {
+		priority int
+		payload  string
+	}
+	m := NewFunc[string, value](func(a, b value) int {
+		return cmp.Compare(b.priority, a.priority)
+	})
+	other := NewFunc[string, value](func(a, b value) int {
+		return cmp.Compare(a.priority, b.priority)
+	})
+	m.Set("existing", value{2, "old"})
+	m.Set("retained", value{2, "retained"})
+	other.Set("first", value{2, "first"})
+	other.Set("existing", value{2, "new"})
+	other.Set("second", value{2, "second"})
+	other.Set("high", value{3, "high"})
+	m.Merge(other)
+	var keys []string
+	for key := range m.All() {
+		keys = append(keys, key)
+	}
+	if !slices.Equal(keys, []string{"high", "existing", "retained", "first", "second"}) {
+		t.Fatalf("merged order = %v", keys)
+	}
+	if got, _ := m.Get("existing"); got.payload != "new" {
+		t.Fatal("merge did not overwrite comparator-equal value")
+	}
+}
+
 func TestMinMax(t *testing.T) {
 	m := New[string, float64]()
 	if _, _, ok := m.Min(); ok {

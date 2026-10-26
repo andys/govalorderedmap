@@ -11,6 +11,7 @@
 //	Min, Max              O(log n) expected
 //	All                   O(n)
 //	Clone                 O(n)
+//	Merge(other)          O(m log(n + m)) expected, m = other.Len()
 //
 // A Map is not safe for concurrent use.
 package valorderedmap
@@ -121,6 +122,19 @@ func (t *Map[K, V]) Set(key K, val V) {
 	t.seq++
 	n.val, n.seq = val, t.seq
 	t.root = t.insert(t.root, n)
+}
+
+// Merge copies entries from other into t, overwriting existing keys using Set.
+// Entries are processed in other's iteration order using t's comparator.
+// Keys and values are copied by assignment, not recursively. Other is unchanged,
+// and merging a map into itself is a no-op.
+func (t *Map[K, V]) Merge(other *Map[K, V]) {
+	if t == other {
+		return
+	}
+	for key, val := range other.All() {
+		t.Set(key, val)
+	}
 }
 
 // Delete removes key, reporting whether it was present.
