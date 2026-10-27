@@ -67,7 +67,7 @@ func TestConcurrentOperations(t *testing.T) {
 			m, other := maps[worker%2], maps[1-worker%2]
 			for i := 0; i < 300; i++ {
 				key := (i + worker) % 64
-				switch i % 15 {
+				switch i % 17 {
 				case 0:
 					m.Set(key, i)
 				case 1:
@@ -126,6 +126,10 @@ func TestConcurrentOperations(t *testing.T) {
 					m.Entries()
 				case 14:
 					m.Merge(m)
+				case 15:
+					m.MergeLarger(other)
+				case 16:
+					m.MergeLarger(m)
 				}
 			}
 		}(worker)
@@ -453,6 +457,96 @@ func TestMergeCustomComparator(t *testing.T) {
 	if got, _ := m.Get("existing"); got.payload != "new" {
 		t.Fatal("merge did not overwrite comparator-equal value")
 	}
+}
+
+func TestMergeLarger(t *testing.T) {
+	m := New[int, int]()
+	for k, v := range []int{10, 20, 30, 40} {
+		m.Set(k, v)
+	}
+	other := New[int, int]()
+	for k, v := range []int{5, 20, 35, 0, -10} {
+		other.Set(k, v)
+	}
+	before := other.Entries()
+	seq := m.seq
+	m.MergeLarger(other)
+	check(t, m, map[int]int{0: 10, 1: 20, 2: 35, 3: 40, 4: -10})
+	if m.seq != seq+2 {
+		t.Fatal("merge reinserted entries that were not larger")
+	}
+	if !slices.Equal(other.Entries(), before) {
+		t.Fatal("merge changed source")
+	}
+	before, seq = m.Entries(), m.seq
+	m.MergeLarger(m)
+	m.MergeLarger(New[int, int]())
+	m.MergeLarger(other)
+	if !slices.Equal(m.Entries(), before) || m.seq != seq {
+		t.Fatal("self, empty, or repeated merge changed map")
+	}
+	empty := New[int, int]()
+	empty.MergeLarger(other)
+	check(t, empty, map[int]int{0: 5, 1: 20, 2: 35, 3: 0, 4: -10})
+}
+
+func TestMergeLargerCustomComparator(t *testing.T) {
+	type value struct {
+		priority int
+		payload  string
+	}
+	m := NewFunc[string, value](func(a, b value) int {
+		return cmp.Compare(b.priority, a.priority)
+	})
+	other := NewFunc[string, value](func(a, b value) int {
+		return cmp.Compare(a.priority, b.priority)
+	})
+	m.Set("equal", value{2, "old"})
+	m.Set("retained", value{2, "retained"})
+	m.Set("larger", value{3, "old"})
+	other.Set("first", value{2, "first"})
+	other.Set("equal", value{2, "new"})
+	other.Set("retained", value{3, "new"})
+	other.Set("larger", value{2, "new"})
+	other.Set("second", value{2, "second"})
+	m.MergeLarger(other)
+	want := []Entry[string, value]{
+		{"equal", value{2, "old"}},
+		{"retained", value{2, "retained"}},
+		{"first", value{2, "first"}},
+		{"larger", value{2, "new"}},
+		{"second", value{2, "second"}},
+	}
+	if got := m.Entries(); !slices.Equal(got, want) {
+		t.Fatalf("merged entries = %v, want %v", got, want)
+	}
+}
+
+func TestConcurrentMergeLarger(t *testing.T) {
+	m := New[int, int]()
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for worker := 0; worker < 8; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			other := New[int, int]()
+			<-start
+			for i := 0; i < 100; i++ {
+				for key := 0; key < 16; key++ {
+					other.Set(key, worker*100+i)
+				}
+				m.MergeLarger(other)
+			}
+		}(worker)
+	}
+	close(start)
+	wg.Wait()
+	ref := make(map[int]int)
+	for key := 0; key < 16; key++ {
+		ref[key] = 799
+	}
+	check(t, m, ref)
 }
 
 func TestMinMax(t *testing.T) {

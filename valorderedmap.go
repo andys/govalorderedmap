@@ -13,6 +13,7 @@
 //	All                   O(n)
 //	Clone                 O(n)
 //	Merge(other)          O(m log(n + m)) expected, m = other.Len()
+//	MergeLarger(other)    O(m + k log(n + m)) expected, k = entries changed
 //
 // A Map is safe for concurrent use. Iteration uses a snapshot.
 package valorderedmap
@@ -161,6 +162,27 @@ func (t *Map[K, V]) Merge(other *Map[K, V]) {
 	defer t.mu.Unlock()
 	for _, entry := range entries {
 		t.set(entry.Key, entry.Value)
+	}
+}
+
+// MergeLarger copies entries from other into t only when the key is absent or
+// the incoming value is strictly larger according to t's comparator. Equal
+// values are left unchanged, including their payloads and tie order.
+// Entries are processed in other's iteration order; keys and values are copied
+// by assignment, not recursively. Other is unchanged, and self-merges are no-ops.
+// MergeLarger snapshots other before locking t, never locking both maps together.
+// All comparisons and updates to t occur under a single write lock.
+func (t *Map[K, V]) MergeLarger(other *Map[K, V]) {
+	if t == other {
+		return
+	}
+	entries := other.Entries()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, entry := range entries {
+		if n, ok := t.m[entry.Key]; !ok || t.compare(entry.Value, n.val) > 0 {
+			t.set(entry.Key, entry.Value)
+		}
 	}
 }
 
